@@ -21,3 +21,15 @@ target/
 generated/
 
 **/.DS_Store
+
+# Maven build output - never commit compiled artifacts
+*/target/
+
+# Local config repo - lives in its own separate GitHub repo (petclinic-config)
+spring-petclinic-microservices-config/
+
+# Environment variable files - never commit secrets
+.env
+*.env
+
+
