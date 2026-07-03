@@ -1,7 +1,17 @@
 services:
   config-server:
-    image: springcommunity/spring-petclinic-config-server
+    build:
+      context: ./spring-petclinic-config-server/target
+      dockerfile: ../../docker/Dockerfile
+      args:
+        ARTIFACT_NAME: spring-petclinic-config-server-4.0.1
+        EXPOSED_PORT: 8888
     container_name: config-server
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker,native
+      - GIT_REPO=/config-repo
+    volumes:
+      - ../petclinic-config:/config-repo
     deploy:
       resources:
         limits:
@@ -15,7 +25,12 @@ services:
      - 8888:8888
 
   discovery-server:
-    image: springcommunity/spring-petclinic-discovery-server
+    build:
+      context: ./spring-petclinic-discovery-server/target
+      dockerfile: ../../docker/Dockerfile
+      args:
+        ARTIFACT_NAME: spring-petclinic-discovery-server-4.0.1
+        EXPOSED_PORT: 8761
     container_name: discovery-server
     deploy:
       resources:
@@ -33,8 +48,15 @@ services:
      - 8761:8761
 
   customers-service:
-    image: springcommunity/spring-petclinic-customers-service
+    build:
+      context: ./spring-petclinic-customers-service/target
+      dockerfile: ../../docker/Dockerfile
+      args:
+        ARTIFACT_NAME: spring-petclinic-customers-service-4.0.1
+        EXPOSED_PORT: 8081
     container_name: customers-service
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker,mysql
     deploy:
       resources:
         limits:
@@ -43,13 +65,24 @@ services:
       config-server:
         condition: service_healthy
       discovery-server:
+        condition: service_healthy
+      mysql-server:
+        condition: service_healthy
+      tracing-server:
         condition: service_healthy
     ports:
     - 8081:8081
 
   visits-service:
-    image: springcommunity/spring-petclinic-visits-service
+    build:
+      context: ./spring-petclinic-visits-service/target
+      dockerfile: ../../docker/Dockerfile
+      args:
+        ARTIFACT_NAME: spring-petclinic-visits-service-4.0.1
+        EXPOSED_PORT: 8082
     container_name: visits-service
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker,mysql
     deploy:
       resources:
         limits:
@@ -59,12 +92,25 @@ services:
         condition: service_healthy
       discovery-server:
         condition: service_healthy
+      mysql-server:
+        condition: service_healthy
+      tracing-server:
+        condition: service_healthy
+      customers-service:
+        condition: service_started
     ports:
      - 8082:8082
 
   vets-service:
-    image: springcommunity/spring-petclinic-vets-service
+    build:
+      context: ./spring-petclinic-vets-service/target
+      dockerfile: ../../docker/Dockerfile
+      args:
+        ARTIFACT_NAME: spring-petclinic-vets-service-4.0.1
+        EXPOSED_PORT: 8083
     container_name: vets-service
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker,mysql
     deploy:
       resources:
         limits:
@@ -73,13 +119,24 @@ services:
       config-server:
         condition: service_healthy
       discovery-server:
+        condition: service_healthy
+      mysql-server:
+        condition: service_healthy
+      tracing-server:
         condition: service_healthy
     ports:
      - 8083:8083
 
 
   genai-service:
-    image: springcommunity/spring-petclinic-genai-service
+    profiles:
+      - genai
+    build:
+      context: ./spring-petclinic-genai-service/target
+      dockerfile: ../../docker/Dockerfile
+      args:
+        ARTIFACT_NAME: spring-petclinic-genai-service-4.0.1
+        EXPOSED_PORT: 8084
     container_name: genai-service
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -94,12 +151,19 @@ services:
         condition: service_healthy
       discovery-server:
         condition: service_healthy
+      tracing-server:
+        condition: service_healthy
     ports:
      - 8084:8084
 
 
   api-gateway:
-    image: springcommunity/spring-petclinic-api-gateway
+    build:
+      context: ./spring-petclinic-api-gateway/target
+      dockerfile: ../../docker/Dockerfile
+      args:
+        ARTIFACT_NAME: spring-petclinic-api-gateway-4.0.1
+        EXPOSED_PORT: 8080
     container_name: api-gateway
     deploy:
       resources:
@@ -109,6 +173,8 @@ services:
       config-server:
         condition: service_healthy
       discovery-server:
+        condition: service_healthy
+      tracing-server:
         condition: service_healthy
     ports:
      - 8080:8080
@@ -120,11 +186,21 @@ services:
       resources:
         limits:
           memory: 512M
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9411/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     ports:
      - 9411:9411
 
   admin-server:
-    image: springcommunity/spring-petclinic-admin-server
+    build:
+      context: ./spring-petclinic-admin-server/target
+      dockerfile: ../../docker/Dockerfile
+      args:
+        ARTIFACT_NAME: spring-petclinic-admin-server-4.0.1
+        EXPOSED_PORT: 9090
     container_name: admin-server
     deploy:
       resources:
@@ -159,3 +235,27 @@ services:
           memory: 256M
     ports:
     - 9091:9090
+
+  mysql-server:
+    image: mysql:9.1
+    container_name: mysql-server
+    environment:
+      - MYSQL_ROOT_PASSWORD=petclinic
+      - MYSQL_DATABASE=petclinic
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-ppetclinic"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    ports:
+     - 3306:3306
+    volumes:
+     - mysql_data:/var/lib/mysql
+
+volumes:
+  mysql_data:
