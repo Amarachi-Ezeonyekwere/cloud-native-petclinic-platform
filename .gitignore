@@ -31,5 +31,5 @@ spring-petclinic-microservices-config/
 # Environment variable files - never commit secrets
 .env
 *.env
-
+README1.md
 
