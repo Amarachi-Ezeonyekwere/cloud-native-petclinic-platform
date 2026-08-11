@@ -1,26 +1,45 @@
 # Cloud-Native PetClinic Platform
 
-> Production-grade cloud-native deployment of the Spring PetClinic 
-> Microservices application on AWS, built as a full end-to-end 
+> A distributed Spring Boot microservices application, deployed to a
+> production-shaped AWS/Kubernetes platform as a full end-to-end
 > DevOps engineering portfolio project.
 
 ## What This Project Demonstrates
 
-- Building and deploying a distributed microservices application 
-  from source (not pre-built images)
-- Production-realistic local development environment using Docker 
-  Compose with MySQL persistence
-- Externalized configuration management via Spring Cloud Config 
-  with a dedicated config repository
-- GitOps delivery via ArgoCD and Helm on Amazon EKS
-- Infrastructure as Code with Terraform (VPC, EKS, RDS, ECR, IAM)
-- End-to-end observability: Prometheus, Grafana, Zipkin
+- Building and deploying a distributed microservices application from
+  source (not pre-built images)
+- A production-realistic local development environment via Docker
+  Compose, with MySQL persistence
+- Externalized configuration via Spring Cloud Config, reading from a
+  dedicated config repository mounted at runtime
+- Deployment to Amazon EKS via Helm, behind a single ALB entry point
+- Dynamic node autoscaling via Karpenter
+- Runtime credential sync from AWS Secrets Manager via External
+  Secrets Operator — no database credentials ever stored in Kubernetes
+  manifests or this repo
+- Infrastructure as Code with Terraform (VPC, EKS, IAM/IRSA, RDS,
+  ECR, Karpenter, observability) — 78 resources, 14 documented
+  architecture decisions
+- Log aggregation via Loki, running on EKS with S3-backed storage
 
----
+## Live status
+
+This application is deployed and running end-to-end on AWS — real
+ALB, real EKS cluster, real RDS database. Deployment steps for the
+full platform, across all four repositories, are documented in
+[`petclinic-infra`'s GETTING-STARTED.md](https://github.com/Amarachi-Ezeonyekwere/petclinic-infra/blob/main/GETTING-STARTED.md).
+
+Deployment is managed via ArgoCD, syncing automatically from
+[`petclinic-gitops`](https://github.com/Amarachi-Ezeonyekwere/petclinic-gitops) —
+any change pushed to that repo's `main` branch is detected and applied
+automatically, with drift correction (`selfHeal`) if the cluster state
+is ever manually changed outside of Git. See ADR-013 in `petclinic-infra`
+for the ArgoCD configuration decisions.
 
 ## Application Architecture
 
-The platform consists of 7 Spring Boot microservices:
+7 Spring Boot microservices (an 8th, `genai-service`, exists in source
+but is excluded from cloud deployment — no API key provisioned):
 
 | Service | Responsibility | Port |
 |---|---|---|
@@ -32,20 +51,26 @@ The platform consists of 7 Spring Boot microservices:
 | Vets Service | Manages veterinarian data | 8083 |
 | Admin Server | Spring Boot Admin monitoring dashboard | 9090 |
 
----
+## Observability
+
+**Deployed to AWS (cloud environment):**
+- **Zipkin** (`tracing-server`) — distributed request tracing across all services
+- **Loki** — log aggregation, S3-backed storage, deployed via Terraform with its own IRSA role (see `petclinic-infra`)
+
+**Local development only (`docker-compose.yml`), not part of the cloud deployment:**
+- Prometheus — metrics scraping
+- Grafana — metrics dashboards
 
 ## Repository Structure
 
-This project follows a GitOps multi-repo pattern:
+This project follows a GitOps-oriented multi-repo pattern:
 
 | Repository | Purpose |
 |---|---|
 | `cloud-native-petclinic-platform` (this repo) | Application source code and Dockerfiles |
 | [petclinic-config](https://github.com/Amarachi-Ezeonyekwere/petclinic-config) | Externalized Spring Cloud Config files |
-| [petclinic-infra](https://github.com/Amarachi-Ezeonyekwere/petclinic-infra) | Terraform infrastructure (AWS) |
-| [petclinic-gitops](https://github.com/Amarachi-Ezeonyekwere/petclinic-gitops) | Helm charts and ArgoCD manifests |
-
----
+| [petclinic-infra](https://github.com/Amarachi-Ezeonyekwere/petclinic-infra) | Terraform infrastructure (AWS) — ADRs and troubleshooting journal live here |
+| [petclinic-gitops](https://github.com/Amarachi-Ezeonyekwere/petclinic-gitops) | Helm charts, Ingress, Karpenter NodePools, External Secrets |
 
 ## Local Development Setup
 
@@ -66,8 +91,8 @@ cd cloud-native-petclinic-platform
 
 ### Step 2 — Clone the config repo alongside it
 
-The config repo must live at `../petclinic-config` relative to this 
-repo, because Docker Compose bind mounts it into the Config Server 
+The config repo must live at `../petclinic-config` relative to this
+repo, because Docker Compose bind mounts it into the Config Server
 container from that path.
 
 ```bash
@@ -76,10 +101,12 @@ git clone https://github.com/Amarachi-Ezeonyekwere/petclinic-config.git
 cd cloud-native-petclinic-platform
 ```
 
-Your folder structure should look like:
+Folder structure should look like:
+```
 ~/
 ├── cloud-native-petclinic-platform/   ← this repo
 └── petclinic-config/                  ← config repo
+```
 
 ### Step 3 — Set JAVA_HOME
 
@@ -90,39 +117,29 @@ echo 'export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64' >> ~/.bashrc
 
 ### Step 4 — Compile all services
 
-This step compiles the Java source code and produces a JAR file 
-for each service. Docker uses these JARs to build container images. 
-This must be run before starting the stack.
-
 ```bash
 ./mvnw clean install -DskipTests
 ```
-
-Expected output: `BUILD SUCCESS` across all 8 modules. Takes 
-approximately 10 minutes on first run (dependency downloads).
+Expected output: `BUILD SUCCESS` across all 8 modules. ~10 minutes on
+first run (dependency downloads).
 
 ### Step 5 — Start the full stack
 
 ```bash
 docker compose up --build
 ```
+Allow 3-5 minutes for all services to start and register with Eureka.
+Startup order is enforced via healthcheck dependencies: Config Server
+→ Discovery Server + MySQL + Zipkin → all other services.
 
-Allow 3-5 minutes for all services to fully start and register 
-with Eureka. Startup order is enforced via healthcheck dependencies:
-Config Server → Discovery Server + MySQL + Zipkin → All other services.
-
-### Step 6 — Verify everything is running
+### Step 6 — Verify
 
 ```bash
 docker compose ps -a
 ```
+All services except `genai-service` should show `Up`.
 
-All services except `genai-service` should show `Up`. 
-`genai-service` requires an OpenAI API key (see below).
-
----
-
-## Service URLs
+## Service URLs (local)
 
 | Service | URL | Credentials |
 |---|---|---|
@@ -134,53 +151,37 @@ All services except `genai-service` should show `Up`.
 | Grafana | http://localhost:3030 | admin / admin |
 | Prometheus | http://localhost:9091 | None |
 
----
+## GenAI Service (Optional, local only)
 
-## GenAI Service (Optional)
-
-The GenAI chatbot service requires an OpenAI API key. It is 
-excluded from the default stack. To enable:
-
+Requires an OpenAI API key. Excluded from both the default local
+stack and the cloud deployment.
 ```bash
 OPENAI_API_KEY=your_key_here docker compose --profile genai up
 ```
 
----
+## Deploying to AWS
 
-## Engineering Decisions
+Full multi-repo deployment steps — infrastructure, Kubernetes
+manifests, config mounting, image builds — are documented in
+[`petclinic-infra`'s GETTING-STARTED.md](https://github.com/Amarachi-Ezeonyekwere/petclinic-infra/blob/main/GETTING-STARTED.md).
 
-Key architectural decisions made in this project are documented 
-in `docs/decisions/`. Highlights:
+Every real issue hit building the cloud deployment (Spring profile
+bugs, Kubernetes-specific config gaps, IAM permission gaps, image
+architecture mismatches) is documented with root cause and fix in
+[`petclinic-infra`'s TROUBLESHOOTING.md](https://github.com/Amarachi-Ezeonyekwere/petclinic-infra/blob/main/docs/TROUBLESHOOTING.md).
 
-- **Build from source vs Docker Hub images** — All service images 
-  are built from locally compiled Maven JARs, not pulled from Docker 
-  Hub. This ensures artifact traceability and mirrors real CI/CD 
-  pipeline behavior. See `docs/decisions/adr-001-build-vs-image.md`
+## Architecture decisions
 
-- **MySQL over HSQLDB** — Production uses persistent MySQL (Amazon 
-  RDS in AWS, containerized MySQL locally) rather than the in-memory 
-  HSQLDB that ships for demo purposes. See 
-  `docs/decisions/adr-002-mysql-over-hsqldb.md`
-
-- **Native config profile** — Config Server reads from a local 
-  filesystem bind mount in development, avoiding the need to push 
-  config changes to GitHub to see them take effect locally. See 
-  `docs/decisions/adr-003-native-config-profile.md`
+All 14 architecture decision records for this platform — infrastructure
+design, cost trade-offs, security scoping, and the account-level
+constraints worked around while building this — live in
+[`petclinic-infra/docs/adr/`](https://github.com/Amarachi-Ezeonyekwere/petclinic-infra/tree/main/docs/adr),
+numbered in the order they were actually made.
 
 ---
 
-## Production Deployment
-
-Production infrastructure and deployment are documented in the 
-companion repositories:
-
-- **Infrastructure**: [petclinic-infra](https://github.com/Amarachi-Ezeonyekwere/petclinic-infra) — Terraform modules for VPC, EKS, RDS, ECR
-- **GitOps**: [petclinic-gitops](https://github.com/Amarachi-Ezeonyekwere/petclinic-gitops) — Helm charts and ArgoCD application manifests
-
----
-
-## License
-
-Based on the [Spring PetClinic Microservices](https://github.com/spring-petclinic/spring-petclinic-microservices) 
-open source project. See LICENSE for details.
-
+*This project's application code originates from the
+[Spring PetClinic Microservices](https://github.com/spring-petclinic/spring-petclinic-microservices)
+open source sample. The infrastructure, Kubernetes deployment,
+observability, and GitOps configuration built on top of it are
+original work, see the repositories above for the full build.*
