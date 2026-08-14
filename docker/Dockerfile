@@ -5,13 +5,20 @@ COPY ${ARTIFACT_NAME}.jar application.jar
 RUN java -Djarmode=layertools -jar application.jar extract
 
 
-FROM eclipse-temurin:17
+FROM eclipse-temurin:17-jre-alpine
 WORKDIR application
 
 ARG EXPOSED_PORT
 EXPOSE ${EXPOSED_PORT}
 
 ENV SPRING_PROFILES_ACTIVE=docker
+
+# Run as a non-root user — matches the Kubernetes securityContext
+# already enforced in the Helm chart (runAsNonRoot, UID 1000).
+# Defense in depth: even if a Kubernetes-level security setting were
+# ever misconfigured, the container itself still refuses to run as root.
+RUN addgroup -g 1000 spring && adduser -D -u 1000 -G spring spring
+USER spring
 
 COPY --from=builder application/dependencies/ ./
 
